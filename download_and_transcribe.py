@@ -38,7 +38,7 @@ def download(url, workdir):
     return vids[0].resolve()
 
 
-def transcribe(video, workdir, model_size, device, compute_type):
+def transcribe(video, workdir, model_size, device, compute_type, url=None):
     from faster_whisper import WhisperModel
     print(f"Loading faster-whisper model={model_size} device={device} "
           f"compute={compute_type} (first run downloads the model)...", flush=True)
@@ -56,6 +56,7 @@ def transcribe(video, workdir, model_size, device, compute_type):
 
     transcript = {
         "video": str(video),
+        "url": url,                      # kept so clips can credit their source video
         "language": info.language,
         "duration": info.duration,
         "model": model_size,
@@ -83,7 +84,7 @@ def main():
 
     video = download(args.url, workdir)
     print("Downloaded:", video, flush=True)
-    transcribe(video, workdir, args.model, args.device, args.compute_type)
+    transcribe(video, workdir, args.model, args.device, args.compute_type, url=args.url)
     print("STAGE 1 COMPLETE", flush=True)
 
 

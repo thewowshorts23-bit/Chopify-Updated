@@ -80,6 +80,19 @@ def check_environment(runner=subprocess.run):
     return problems
 
 
+def broll_problems(sources_spec, broll_dir=None, env=None):
+    """Setup problems that would make --broll useless (no usable footage source)."""
+    import broll_fetch
+    try:
+        requested = broll_fetch.parse_sources(sources_spec)
+    except SystemExit as e:
+        return [str(e)]
+    if broll_fetch.available_sources(requested, broll_dir, env):
+        return []
+    return ["--broll has no usable source: set PEXELS_API_KEY and/or PIXABAY_API_KEY "
+            "(both free), or pass --broll-dir <folder of your own footage/images>."]
+
+
 def sh(cmd):
     print("\n" + "=" * 70, flush=True)
     print(">", " ".join(str(c) for c in cmd), flush=True)
@@ -115,6 +128,16 @@ def main():
     ap.add_argument("--preview", action="store_true",
                     help="render fast 480p drafts (no poster/meta) to review the "
                          "picks before the full render")
+    ap.add_argument("--broll", action="store_true",
+                    help="add B-roll cutaways (stock video/photos or your own footage) "
+                         "so clips look edited, not just captioned")
+    ap.add_argument("--broll-dir", default=None, metavar="DIR",
+                    help="folder of your own footage/images to use as B-roll")
+    ap.add_argument("--broll-sources", default="local,pexels,pixabay", metavar="LIST",
+                    help="B-roll sources in priority order (default local,pexels,pixabay); "
+                         "pexels/pixabay need PEXELS_API_KEY / PIXABAY_API_KEY")
+    ap.add_argument("--broll-max-pct", type=float, default=0.40, metavar="FRAC",
+                    help="max fraction of each clip covered by B-roll (default 0.40)")
     ap.add_argument("--min-score", type=float, default=None,
                     help="keep clips at/above this virality score")
     ap.add_argument("--max-clips", type=int, default=10)
@@ -128,6 +151,8 @@ def main():
 
     if not args.no_preflight:
         problems = check_environment()
+        if args.broll:
+            problems += broll_problems(args.broll_sources, args.broll_dir)
         if problems:
             print("PREFLIGHT FAILED - fix these and re-run "
                   "(or bypass with --no-preflight):", flush=True)
@@ -157,9 +182,23 @@ def main():
         cmd += ["--clips", args.clips]
     sh(cmd)
 
+    # Stage 2.5 / 2.6: plan + fetch B-roll cutaways (optional)
+    if args.broll:
+        cmd = [PY, HERE / "broll_plan.py", workdir, "--max-pct", args.broll_max_pct]
+        if args.llm:
+            cmd += ["--llm", args.llm]
+        sh(cmd)
+        cmd = [PY, HERE / "broll_fetch.py", workdir, "--aspect", args.aspect,
+               "--sources", args.broll_sources]
+        if args.broll_dir:
+            cmd += ["--broll-dir", args.broll_dir]
+        sh(cmd)
+
     # Stage 3: render
     cmd = [PY, HERE / "render_clips.py", workdir,
            "--aspect", args.aspect, "--style", args.style]
+    if args.broll:
+        cmd.append("--broll")
     if args.out:
         cmd += ["--out", args.out]
     if args.tighten:

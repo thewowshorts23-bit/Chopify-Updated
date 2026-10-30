@@ -39,6 +39,7 @@
 - **Keyword search** (`--search "pricing"`) &#8212; bypass virality scoring and build clips around transcript sentences containing your keywords.
 - **Preview drafts** (`--preview`) &#8212; render fast 480p cuts (no poster/meta) to check your picks before the full render.
 - **Pre-flight check** &#8212; before any stage, verifies ffmpeg/ffprobe, the H.264/AAC encoders, and required Python packages, with fix hints. Bypass with `--no-preflight`.
+- **B-roll cutaways** (`--broll`) &#8212; clips look edited, not just captioned: 2&#8211;3 s stock-video or photo cutaways appear as the speaker mentions concrete things, with fades, Ken Burns zoom on stills and captions kept on top. Use your own footage (`--broll-dir`) or free Pexels / Pixabay keys. See [B-roll](#b-roll-cutaways).
 - **Tighten cuts** (`--tighten`) &#8212; filler words ("um", "uh", "you know") and long silences are removed automatically, with captions re-timed to match.
 - **Caption style presets** &#8212; `default`, `hormozi` (red highlight), `mrbeast` (green), `podcast` (clean) &#8212; word-by-word, burnt in with ffmpeg.
 - **Ready-to-post metadata** &#8212; every clip ships with a `.meta.json` (title, description, hashtags) plus a PNG poster thumbnail.
@@ -126,6 +127,39 @@ python render_clips.py work --aspect 9:16 --style default --tighten
 ```
 
 Output lands in `./clips` by default &#8212; change with `--out DIR` or `$CHOPIFY_OUT`.
+
+## B-roll cutaways
+
+Add `--broll` to make clips look edited instead of just captioned:
+
+```bash
+set PEXELS_API_KEY=your_free_key                    # and/or PIXABAY_API_KEY
+python chopify.py "URL" --aspect 9:16 --style hormozi --tighten --broll
+python chopify.py "URL" --broll --broll-dir D:\my_broll    # your own footage/images
+python chopify.py "URL" --broll --llm qwen2.5:7b           # local LLM plans the cutaways
+```
+
+Stages (also runnable one by one): `broll_plan.py work` &#8594; `broll_fetch.py work` &#8594; `render_clips.py work --broll`.
+
+- **Planning** &#8212; picks concrete nouns / proper nouns from the transcript and puts a
+  cutaway just before the word is spoken. The first 1.5 s of every clip (the hook) always
+  stays on the speaker, cutaways never overlap, and B-roll covers at most
+  `--broll-max-pct` (default 0.40) of a clip.
+- **Sources** (`--broll-sources`, default `local,pexels,pixabay`) &#8212; your own folder is
+  matched by file/folder names against the cutaway query (`rocket_launch.mp4` matches
+  "rocket"). Pexels and Pixabay need a free API key and allow commercial use without
+  attribution (re-check their current terms). A cutaway with no match is dropped &#8212;
+  no footage beats irrelevant footage.
+- **Look** &#8212; cutaways fade in/out, still photos get a slow Ken Burns zoom, the speaker's
+  audio keeps playing, captions stay on top.
+- **Credits** &#8212; each clip's `.meta.json` lists every asset used (source, author, URL,
+  license) plus `source_video`.
+
+> [!IMPORTANT]
+> Editing does not change who owns the footage. YouTube may demonetize channels that
+> mostly re-upload other people's videos with light edits, so use `--broll` on your own
+> videos, videos you have permission for, or videos you add real commentary to, and check
+> YouTube's current Partner Program policies.
 
 ## FAQ
 

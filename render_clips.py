@@ -26,6 +26,7 @@ from pathlib import Path
 
 import tighten  # local module: filler/silence removal
 import smooth_crop  # cut-aware, per-frame smooth crop path
+import broll_overlay  # B-roll cutaway filter graph (used with --broll)
 
 # aspect -> (target_w, target_h, caption_font_size, caption_margin_v)
 ASPECTS = {
@@ -288,8 +289,12 @@ def build_ass(words, clip_start, clip_end, path, tw, th, font_size, margin_v,
     Path(path).write_text(header + "\n".join(events) + "\n", encoding="utf-8")
 
 
-def write_meta(seg, out_path):
-    """Deterministic ready-to-post metadata saved as <clip>.meta.json."""
+def write_meta(seg, out_path, credits=None, source_url=None):
+    """Deterministic ready-to-post metadata saved as <clip>.meta.json.
+
+    credits:    B-roll credit records (source/author/url/license), if any were used.
+    source_url: the video the clip was cut from, recorded for attribution.
+    """
     hook = str(seg.get("hook", "clip")).replace("-", " ").strip()
     title = hook.capitalize()
     meta = {
@@ -301,14 +306,22 @@ def write_meta(seg, out_path):
         "start": seg.get("start"),
         "end": seg.get("end"),
     }
+    if source_url:
+        meta["source_video"] = source_url
+    if credits:
+        meta["broll_credits"] = credits
     Path(out_path).with_suffix(".meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return Path(out_path).with_suffix(".meta.json")
 
 
 def render(seg, words, source, W, H, workdir, aspect, out_dir=None, style=DEFAULT_STYLE,
-           do_tighten=False, loudnorm=False, preview=False):
-    out_dir = Path(out_dir) if out_dir else default_out()
+           do_tighten=False, loudnorm=False, preview=False, broll=None, source_url=None):
+    """Render one clip. `broll` = this clip's cutaways from broll_overlay.load_cuts()
+    (absolute source times + asset paths); None/[] renders exactly as before."""
+    # Resolve once: ffmpeg runs with cwd=out_dir, so a relative out_dir (the default
+    # ./clips!) made `--tighten` look for outT/outT/_tight_source.mp4 and fail.
+    out_dir = (Path(out_dir) if out_dir else default_out()).resolve()
     full_w, full_h, font_size, margin_v = ASPECTS[aspect]
     if preview:
         # fast 480p-class draft: smaller frame, smaller captions, no poster/meta
@@ -320,11 +333,13 @@ def render(seg, words, source, W, H, workdir, aspect, out_dir=None, style=DEFAUL
         tw, th = full_w, full_h
     start = float(seg["start"])
     end = float(seg["end"])
+    orig_start = start                   # `start` is reset to 0 below when tightening
     dur = end - start
     cw, ch, x0, y0 = crop_for(W, H, tw, th)
 
     cap_words = words
     render_src = source
+    keeps = None
     if do_tighten:
         keeps = tighten.plan_cuts(words, start, end)
         render_src = out_dir / "_tight_source.mp4"
@@ -336,24 +351,36 @@ def render(seg, words, source, W, H, workdir, aspect, out_dir=None, style=DEFAUL
     build_ass(cap_words, start, start + dur, out_dir / "_caption.ass",
               tw, th, font_size, margin_v, style)
 
+    # B-roll: re-time absolute cutaway times onto this clip's (possibly tightened) timeline
+    cuts = broll_overlay.retime_cuts(broll, orig_start, dur, keeps) if broll else []
+
     needs_track = cw < W * 0.95          # real horizontal crop -> track the speaker
+    fps = ffprobe_fps(render_src)
     if needs_track:
-        fps = ffprobe_fps(render_src)
         track = smooth_crop.smooth_track(
             detect_track(render_src, start, dur, W, workdir), W, cw, fps, DET_FPS)
         smooth_crop.build_sendcmd(track, cw, out_dir / "_crop.cmd", fps)
         init_x = max(0, min(int(round(track[0][1] - cw / 2.0)), W - cw))
-        vf = (f"sendcmd=f=_crop.cmd,crop=w={cw}:h={ch}:x={init_x}:y={y0}:exact=1,"
-              f"scale={tw}:{th},subtitles=_caption.ass")
+        base = (f"sendcmd=f=_crop.cmd,crop=w={cw}:h={ch}:x={init_x}:y={y0}:exact=1,"
+                f"scale={tw}:{th}")
         mode = "speaker-tracked"
     else:
-        vf = f"crop={cw}:{ch}:{x0}:{y0},scale={tw}:{th},subtitles=_caption.ass"
+        base = f"crop={cw}:{ch}:{x0}:{y0},scale={tw}:{th}"
         mode = "full-frame"
+    caption = "subtitles=_caption.ass"
 
     suffix = ".preview" if preview else ""
     out = out_dir / (sanitize(seg.get("hook", "clip")) + suffix + ".mp4")
-    cmd = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(render_src),
-           "-t", f"{dur:.3f}", "-vf", vf,
+    head = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(render_src)]
+    if cuts:
+        extra, fc = broll_overlay.build_graph(base, cuts, tw, th, fps, caption,
+                                              probe=ffprobe_dims)
+        head += extra
+        graph = ["-filter_complex", fc, "-map", "[outv]", "-map", "0:a?"]
+        mode += f" + {len(cuts)} b-roll"
+    else:
+        graph = ["-vf", f"{base},{caption}"]
+    cmd = head + ["-t", f"{dur:.3f}"] + graph + [
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(out.name)]
     if loudnorm:
@@ -384,7 +411,8 @@ def render(seg, words, source, W, H, workdir, aspect, out_dir=None, style=DEFAUL
     subprocess.run(["ffmpeg", "-y", "-ss", f"{dur * 0.4:.2f}", "-i", str(out),
                     "-frames:v", "1", "-q:v", "2", str(poster)],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    meta_path = write_meta(seg, out)
+    meta_path = write_meta(seg, out, credits=broll_overlay.collect_credits(cuts),
+                           source_url=source_url)
 
     print(f"SAVED {out}  ({aspect} {tw}x{th}, {mode})  "
           f"+ poster {poster.name} + {meta_path.name}", flush=True)
@@ -409,6 +437,9 @@ def main():
                          "clip selection before the full render")
     ap.add_argument("--only", type=int, default=None, metavar="N",
                     help="render only clip number N from segments.json (quick test)")
+    ap.add_argument("--broll", action="store_true",
+                    help="add B-roll cutaways from work/broll.json "
+                         "(run broll_plan.py + broll_fetch.py first)")
     args = ap.parse_args()
 
     workdir = Path(args.workdir).resolve()
@@ -427,7 +458,12 @@ def main():
 
     W, H = ffprobe_dims(source)
     print(f"Source {source} {W}x{H}; {len(segments)} clips -> {args.aspect} "
-          f"(style={args.style}, tighten={args.tighten}) -> {out_dir}", flush=True)
+          f"(style={args.style}, tighten={args.tighten}, broll={args.broll}) -> {out_dir}",
+          flush=True)
+    source_url = transcript.get("url")
+    if args.broll and not (workdir / "broll.json").exists():
+        print("  --broll: no work/broll.json found - run broll_plan.py and "
+              "broll_fetch.py first; rendering without B-roll.", flush=True)
 
     saved = []
     for i, seg in enumerate(segments, 1):
@@ -437,10 +473,12 @@ def main():
               f"{seg.get('hook', '')[:60]!r} (overall {seg.get('overall')}) ---",
               flush=True)
         try:
+            cuts = broll_overlay.load_cuts(workdir, seg) if args.broll else None
             saved.append(str(render(seg, words, source, W, H, workdir, args.aspect,
                                     out_dir=out_dir, style=args.style,
                                     do_tighten=args.tighten, loudnorm=args.loudnorm,
-                                    preview=args.preview)))
+                                    preview=args.preview, broll=cuts,
+                                    source_url=source_url)))
         except subprocess.CalledProcessError as e:
             print(f"ERROR rendering clip {i}: {e}", flush=True)
 

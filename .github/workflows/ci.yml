@@ -22,7 +22,7 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Compile check
-        run: python -m py_compile chopify.py download_and_transcribe.py score_clips.py render_clips.py tighten.py
+        run: python -m py_compile chopify.py download_and_transcribe.py score_clips.py render_clips.py tighten.py broll_plan.py broll_fetch.py broll_overlay.py
 
       - name: Run tests
         run: pytest tests/ -q

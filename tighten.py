@@ -108,7 +108,10 @@ def apply_cuts(source, keeps, clip_start, out_path, crf=18):
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             parts.append(part)
         lst = tmp / "list.txt"
-        lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts),
+        # ffmpeg's concat demuxer resolves relative entries against the LIST FILE's
+        # folder, so a relative --out (including the default ./clips) doubled the path
+        # and --tighten failed. Absolute paths work from any cwd.
+        lst.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in parts),
                        encoding="utf-8")
         subprocess.run(
             ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst),

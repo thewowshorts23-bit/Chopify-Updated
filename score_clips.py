@@ -105,6 +105,23 @@ def sentenceize(words, gap=1.2):
 WEIGHTS = {"hook": 0.20, "shock": 0.10, "humour": 0.05, "controversy": 0.10,
            "insight": 0.15, "emotion": 0.10, "energy": 0.15, "arc": 0.15}
 
+# NOTE: this must live above the `if __name__ == "__main__"` block. When it sat
+# below it, `python score_clips.py --llm ...` hit a NameError that the Ollama
+# try/except swallowed, so --llm silently fell back to the heuristic.
+LLM_SYSTEM = (
+    "You are a short-form video editor. You receive a timestamped transcript. "
+    "Select the moments most likely to go viral as self-contained clips. Rules:\n"
+    "- Each clip MUST be a complete thought: hook, build, payoff. Never end mid-sentence.\n"
+    "- Clip length between {min_len} and {max_len} seconds.\n"
+    "- Return AT MOST {max_clips} clips, taken from DIFFERENT parts of the video.\n"
+    "- Rate each clip 0-10 on hook, shock, humour, controversy, insight, emotion, "
+    "energy and complete arc; put the mean in 'overall'.\n"
+    "- Only include clips with overall >= {min_score}.\n"
+    'Respond with JSON only, an array: [{{"start": <sec>, "end": <sec>, '
+    '"hook": "<3-7 word title>", "overall": <0-10>}}]'
+)
+
+
 def _cues(low, group):
     return min(1.0, sum(c in low for c in group) / 2.0)
 
@@ -444,23 +461,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# criterion -> weight (hook/energy/arc dominate; matches the README's 8 criteria)
-WEIGHTS = {"hook": 0.20, "shock": 0.10, "humour": 0.05, "controversy": 0.10,
-           "insight": 0.15, "emotion": 0.10, "energy": 0.15, "arc": 0.15}
-
-LLM_SYSTEM = (
-    "You are a short-form video editor. You receive a timestamped transcript. "
-    "Select the moments most likely to go viral as self-contained clips. Rules:\n"
-    "- Each clip MUST be a complete thought: hook, build, payoff. Never end mid-sentence.\n"
-    "- Clip length between {min_len} and {max_len} seconds.\n"
-    "- Return AT MOST {max_clips} clips, taken from DIFFERENT parts of the video.\n"
-    "- Rate each clip 0-10 on hook, shock, humour, controversy, insight, emotion, "
-    "energy and complete arc; put the mean in 'overall'.\n"
-    "- Only include clips with overall >= {min_score}.\n"
-    'Respond with JSON only, an array: [{{"start": <sec>, "end": <sec>, '
-    '"hook": "<3-7 word title>", "overall": <0-10>}}]'
-)
-
-# --- transcript helpers below ---
