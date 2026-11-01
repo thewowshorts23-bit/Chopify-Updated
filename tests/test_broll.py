@@ -58,12 +58,12 @@ def test_tighten_works_with_relative_output_dir(tmp_path, monkeypatch):
 
 # ============================================================= broll_plan
 
-def test_make_query_prefers_proper_nouns_and_skips_stopwords():
+def test_make_query_picks_filmable_nouns():
     words = sentence_words("Yesterday the Rocket exploded right over the Ocean.", 0.0)
-    q, anchor, score = broll_plan.make_query(words)
+    q, anchor, score = broll_plan.make_query(words, max_terms=2)
     assert set(q.split()) == {"rocket", "ocean"}
     assert anchor == words[2]["start"]                      # "Rocket" is spoken first
-    assert score > 0
+    assert score == 2.0
 
 
 def test_make_query_none_for_empty_content():
@@ -77,7 +77,7 @@ def test_enforce_keeps_hook_clear_and_no_overlap():
             {"t": 110.0, "dur": 2.6, "query": "c"},
             {"t": 111.0, "dur": 2.6, "query": "d"}]          # too close to c
     out = broll_plan.enforce(cuts, 100.0, 140.0)
-    assert out and all(c["t"] >= 101.5 for c in out)
+    assert out and all(c["t"] >= 100.0 + broll_plan.INTRO for c in out)
     for a, b in zip(out, out[1:]):
         assert b["t"] >= a["t"] + a["dur"] + broll_plan.MIN_GAP - 1e-6
     assert [c["query"] for c in out] == ["a", "c"]
@@ -225,7 +225,8 @@ def test_fetcher_downloads_caches_and_falls_back(tmp_path):
         calls["http"] += 1
         if "videos" in url:
             return {"videos": []}                                        # no video results
-        return {"photos": [{"id": 1, "width": 100, "height": 100, "url": "u",
+        return {"photos": [{"id": 1, "width": 100, "height": 100,
+                            "url": "https://www.pexels.com/photo/rocket-launch-pad-1/",
                             "photographer": "P", "src": {"large": "https://cdn/1.jpg"}}]}
 
     def fake_dl(url, dest):
@@ -244,8 +245,10 @@ def test_fetcher_downloads_caches_and_falls_back(tmp_path):
 def test_fetcher_skips_failed_downloads(tmp_path):
     def fake_http(url, headers=None):
         return {"photos": [
-            {"id": 1, "width": 1, "height": 1, "url": "u", "photographer": "A", "src": {"large": "bad"}},
-            {"id": 2, "width": 1, "height": 1, "url": "u", "photographer": "B", "src": {"large": "good"}}]}
+            {"id": 1, "width": 1, "height": 1, "url": "https://www.pexels.com/photo/anything-a-1/",
+             "photographer": "A", "src": {"large": "bad"}},
+            {"id": 2, "width": 1, "height": 1, "url": "https://www.pexels.com/photo/anything-b-2/",
+             "photographer": "B", "src": {"large": "good"}}]}
 
     def fake_dl(url, dest):
         if url == "bad":
@@ -396,3 +399,147 @@ def test_render_with_broll_end_to_end(tmp_path):
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out)],
         capture_output=True, text=True, check=True).stdout)
     assert 8.5 < dur < 9.5
+
+
+# ============================== regressions from the first real-world run
+# The first real run (a podcast) produced queries like "don't", "there's believe",
+# "syed wordpress", "natural moneymaker" and unrelated footage (eggs, rice field,
+# eclipse, black hole) for every one of them, with zero cutaways dropped.
+
+JUNK_SENTENCES = [
+    "And there's this famous story where he believe a shipping company fired people.",
+    "I don't know what's hurting them, they're noticing nothing.",
+    "He is a natural moneymaker and I believe that.",
+    "That explains why he's massive.",
+    "Vishal said something about privacy.",                  # a name + an abstract word
+]
+
+
+@pytest.mark.parametrize("text", JUNK_SENTENCES)
+def test_make_query_ignores_names_verbs_and_contractions(text):
+    assert broll_plan.make_query(sentence_words(text, 0.0)) is None
+
+
+def test_make_query_handles_contractions_possessives_and_plurals():
+    q, _, _ = broll_plan.make_query(sentence_words("Bitcoin's coins don't lie.", 0.0), max_terms=2)
+    assert set(q.split()) == {"bitcoin", "coin"}
+    assert broll_plan._clean("don't") == "dont" and broll_plan._clean("he's") == "he"
+    assert broll_plan._lookup("companies") is None            # not in the list -> not searched
+    assert broll_plan._lookup("laptops") == "laptop"
+    assert broll_plan._lookup("batteries") is None
+
+
+def test_make_query_uses_stock_friendly_aliases():
+    q, _, _ = broll_plan.make_query(sentence_words("Buying WordPress plugins early.", 0.0))
+    assert q == "website design"
+    q, _, _ = broll_plan.make_query(sentence_words("The market took a dive.", 0.0))
+    assert q == "stock market"
+
+
+def test_every_alias_key_is_a_visual_word():
+    assert set(broll_plan.ALIASES) <= broll_plan.VISUAL
+
+
+def test_hook_stays_on_speaker_for_first_three_seconds():
+    assert broll_plan.INTRO >= 3.0
+    words = sentence_words("Money money money everywhere in this big city today friends.", 100.2)
+    cuts = broll_plan.plan_heuristic(score_clips.sentenceize(words), 100.0, 140.0)
+    assert all(c["t"] >= 103.0 for c in cuts)
+
+
+def test_plan_heuristic_never_repeats_the_same_idea():
+    words = []
+    for i, s in enumerate(["The money was in the bank.", "More money arrived at the bank.",
+                           "A new laptop sat on the desk.", "Bitcoin crashed and the market fell."]):
+        words += sentence_words(s, 5 + i * 9)
+    cuts = broll_plan.plan_heuristic(score_clips.sentenceize(words), 0.0, 60.0)
+    queries = [c["query"] for c in cuts]
+    seen = set()
+    for q in queries:
+        assert not set(q.split()) <= seen
+        seen |= set(q.split())
+
+
+def test_plan_heuristic_returns_nothing_when_nothing_is_filmable():
+    words = sentence_words("I believe he explains why privacy matters to everyone involved here.", 10.0)
+    assert broll_plan.plan_heuristic(score_clips.sentenceize(words), 0.0, 60.0) == []
+
+
+def test_slug_and_tag_helpers():
+    assert broll_fetch.slug_tags("https://www.pexels.com/video/man-typing-on-laptop-855564/") \
+        == "man typing on laptop"
+    assert broll_fetch.slug_tags("") == "" and broll_fetch.slug_tags(None) == ""
+    assert broll_fetch.split_tags("money, euro,  cash") == "money euro cash"
+    assert broll_fetch.is_relevant("laptop", "man typing on laptop")
+    assert broll_fetch.is_relevant("coins money", "gold coin stack")        # plural -> singular
+    assert not broll_fetch.is_relevant("laptop", "green field sunset")
+    assert not broll_fetch.is_relevant("laptop", "")                         # unknown -> reject
+
+
+def test_fetcher_rejects_results_that_do_not_match_the_query(tmp_path):
+    """Stock sites return something for every query; an unrelated clip must be
+    skipped (this is what put eggs, a rice field and a black hole on screen)."""
+    def fake_http(url, headers=None):
+        return {"photos": [
+            {"id": 1, "width": 1, "height": 1, "photographer": "A", "src": {"large": "u1"},
+             "url": "https://www.pexels.com/photo/plate-of-eggs-and-cucumber-1/"},
+            {"id": 2, "width": 1, "height": 1, "photographer": "B", "src": {"large": "u2"},
+             "url": "https://www.pexels.com/photo/stacks-of-money-2/"}]}
+    f = broll_fetch.Fetcher(tmp_path, ["pexels"], "16:9", prefer="image",
+                            env={"PEXELS_API_KEY": "K"}, http=fake_http,
+                            download=lambda u, d: Path(d).write_bytes(b"x"), sleep=lambda s: None)
+    assert f.find("money")["file"].endswith("pexels_p2.jpg")
+    f2 = broll_fetch.Fetcher(tmp_path / "w2", ["pexels"], "16:9", prefer="image",
+                             env={"PEXELS_API_KEY": "K"}, http=fake_http,
+                             download=lambda u, d: Path(d).write_bytes(b"x"), sleep=lambda s: None)
+    assert f2.find("rocket") is None                                         # nothing matches -> dropped
+
+
+def test_search_results_carry_tags():
+    def fake(url, headers=None):
+        if "pixabay" in url and "/videos/" in url:
+            return {"hits": [{"id": 3, "duration": 9, "pageURL": "p", "user": "Cy",
+                              "tags": "money, cash, finance",
+                              "videos": {"medium": {"url": "https://cdn/m.mp4", "width": 1920,
+                                                    "height": 1080}}}]}
+        return {"videos": [{"id": 7, "duration": 12, "url": "https://www.pexels.com/video/office-desk-7/",
+                            "user": {"name": "Ann"},
+                            "video_files": [{"link": "l", "width": 1920, "height": 1080,
+                                             "file_type": "video/mp4"}]}]}
+    assert broll_fetch.search_pixabay("money", "16:9", "K", "video", http=fake)[0]["tags"] \
+        == "money cash finance"
+    assert broll_fetch.search_pexels("desk", "16:9", "K", "video", http=fake)[0]["tags"] \
+        == "office desk"
+
+
+# ============ regressions from the second real-world run (broll.json review)
+
+def test_one_idea_per_cutaway_by_default():
+    """'profit website design' (two unrelated ideas glued together) returned a woman
+    on a phone. Default is now a single concept per cutaway."""
+    words = sentence_words("The profit came from buying WordPress plugins and Bitcoin.", 0.0)
+    q, _, _ = broll_plan.make_query(words)
+    assert q == "profit"
+    assert len(broll_plan.make_query(words, max_terms=2)[0].split()) >= 2   # still possible
+
+
+def test_a_couple_of_is_not_a_couple():
+    """'a couple of friends' means 'a few'; it produced a romantic-couple silhouette."""
+    q, _, _ = broll_plan.make_query(sentence_words("I've had a couple of friends that started.", 0.0))
+    assert "couple" not in q.split() and q == "friends together"
+    q2, _, _ = broll_plan.make_query(sentence_words("The couple got married at sunset.", 0.0))
+    assert q2 == "couple"
+
+
+def test_longer_queries_need_more_than_one_matching_word():
+    assert broll_fetch.is_relevant("laptop", "laptop desk")
+    assert broll_fetch.is_relevant("investor laptop", "man with laptop")          # 2 words: one is fine
+    assert not broll_fetch.is_relevant("profit website design", "woman holding phone website")
+    assert broll_fetch.is_relevant("profit website design", "website design layout")
+
+
+def test_generic_words_are_not_used_as_fallback_searches():
+    assert broll_fetch.query_variants("website design") == ["website design", "website"]
+    assert broll_fetch.query_variants("money") == ["money"]
+    assert broll_fetch.query_variants("stock investor laptop") == \
+        ["stock investor laptop", "investor", "laptop"]

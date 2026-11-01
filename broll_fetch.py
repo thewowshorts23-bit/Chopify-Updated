@@ -98,6 +98,33 @@ def parse_sources(spec):
 
 # ------------------------------------------------------------- remote search
 
+GENERIC = {"design", "together", "stock", "photo", "video", "image", "people", "background"}
+
+
+def slug_tags(url):
+    """Words from a Pexels page URL slug, e.g. .../video/man-typing-on-laptop-855564/
+    -> 'man typing on laptop'. Pexels search results carry no tag list, but the slug
+    is the asset's own description, which is enough to check relevance."""
+    parts = [p for p in urllib.parse.urlparse(url or "").path.split("/") if p]
+    slug = parts[-1] if parts else ""
+    return re.sub(r"[-_]+", " ", re.sub(r"-?\d+$", "", slug)).strip()
+
+
+def split_tags(tags):
+    """Pixabay 'tags' field ('money, euro, cash') -> 'money euro cash'."""
+    return re.sub(r"[,\s]+", " ", tags or "").strip()
+
+
+def is_relevant(query, tags):
+    """True when at least one query word (singular-ised) appears in the asset's own
+    tags/description. Stock sites rank loosely ('don't' returns random clips), so
+    without this check an unrelated video is accepted for every query. Missing tags
+    count as NOT relevant: no footage beats irrelevant footage."""
+    q = _tokens(query)
+    need = (len(q) + 1) // 2            # 1-2 words: any one; 3 words: two; 4 words: two
+    return len(q & _tokens(tags or "")) >= max(1, need)
+
+
 def pick_video_file(files, want=(1080, 1920)):
     """Pick the mp4 whose pixel count is the smallest that still covers `want`
     (avoids multi-GB 4K downloads); if none is big enough, the largest."""
@@ -125,6 +152,7 @@ def search_pexels(query, aspect, key, kind, http=None):
             if f:
                 out.append({"kind": "video", "id": f"pexels_v{v['id']}", "url": f["link"],
                             "ext": ".mp4", "duration": v.get("duration"),
+                            "tags": slug_tags(v.get("url")),
                             "credit": {"source": "Pexels", "author": (v.get("user") or {}).get("name"),
                                        "url": v.get("url"), "license": LICENSES["pexels"]}})
     else:
@@ -135,6 +163,7 @@ def search_pexels(query, aspect, key, kind, http=None):
             if url:
                 out.append({"kind": "image", "id": f"pexels_p{p['id']}", "url": url,
                             "ext": ".jpg", "w": p.get("width"), "h": p.get("height"),
+                            "tags": slug_tags(p.get("url")) + " " + (p.get("alt") or ""),
                             "credit": {"source": "Pexels", "author": p.get("photographer"),
                                        "url": p.get("url"), "license": LICENSES["pexels"]}})
     return out
@@ -154,6 +183,7 @@ def search_pixabay(query, aspect, key, kind, http=None):
             if f:
                 out.append({"kind": "video", "id": f"pixabay_v{h['id']}", "url": f["link"],
                             "ext": ".mp4", "duration": h.get("duration"),
+                            "tags": split_tags(h.get("tags")),
                             "credit": {"source": "Pixabay", "author": h.get("user"),
                                        "url": h.get("pageURL"), "license": LICENSES["pixabay"]}})
     else:
@@ -165,6 +195,7 @@ def search_pixabay(query, aspect, key, kind, http=None):
             if url:
                 out.append({"kind": "image", "id": f"pixabay_p{h['id']}", "url": url,
                             "ext": ".jpg", "w": h.get("imageWidth"), "h": h.get("imageHeight"),
+                            "tags": split_tags(h.get("tags")),
                             "credit": {"source": "Pixabay", "author": h.get("user"),
                                        "url": h.get("pageURL"), "license": LICENSES["pixabay"]}})
     return out
@@ -216,7 +247,8 @@ def query_variants(query):
     terms = query.split()
     out = [query]
     if len(terms) > 1:
-        out += sorted(terms, key=len, reverse=True)
+        # single-word fallbacks, but never a word too generic to mean anything alone
+        out += sorted((t for t in terms if t not in GENERIC), key=len, reverse=True)
     return out
 
 
@@ -271,6 +303,10 @@ class Fetcher:
                 for kind in self.kinds:
                     for cand in self._search(source, variant, kind):
                         if cand["id"] in self.used:
+                            continue
+                        # remote results must describe what we searched for; local
+                        # files were already matched by name (no "tags" key)
+                        if "tags" in cand and not is_relevant(variant, cand["tags"]):
                             continue
                         dur = cand.get("duration")
                         if kind == "video" and dur and dur < need_dur:

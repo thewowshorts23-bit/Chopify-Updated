@@ -136,8 +136,8 @@ def main():
     ap.add_argument("--broll-sources", default="local,pexels,pixabay", metavar="LIST",
                     help="B-roll sources in priority order (default local,pexels,pixabay); "
                          "pexels/pixabay need PEXELS_API_KEY / PIXABAY_API_KEY")
-    ap.add_argument("--broll-max-pct", type=float, default=0.40, metavar="FRAC",
-                    help="max fraction of each clip covered by B-roll (default 0.40)")
+    ap.add_argument("--broll-max-pct", type=float, default=0.30, metavar="FRAC",
+                    help="max fraction of each clip covered by B-roll (default 0.30)")
     ap.add_argument("--min-score", type=float, default=None,
                     help="keep clips at/above this virality score")
     ap.add_argument("--max-clips", type=int, default=10)

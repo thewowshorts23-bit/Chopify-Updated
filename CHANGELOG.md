@@ -14,8 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in your own folder (`--broll-dir`) or from Pexels / Pixabay (free API keys,
   standard library only); `broll_overlay.py` builds the ffmpeg filter graph.
   Cutaways fade in/out, stills get a Ken Burns zoom, captions stay on top, the
-  first 1.5 s (the hook) always stays on the speaker, and B-roll is capped at
-  `--broll-max-pct` (default 40 %) of each clip. Works with 16:9 / 9:16 / 1:1
+  first 3 s (the hook) always stay on the speaker, and B-roll is capped at
+  `--broll-max-pct` (default 30 %) of each clip. Cutaways only happen on concrete,
+  filmable words (a curated list), and a downloaded asset must match the searched
+  words in its own tags or it is skipped. Works with 16:9 / 9:16 / 1:1
   and with `--tighten` (cutaways are re-timed onto the shortened clip).
 - `.meta.json` now records `source_video` and `broll_credits` (source, author,
   URL, license for every asset used).

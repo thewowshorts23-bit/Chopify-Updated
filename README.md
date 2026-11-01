@@ -141,10 +141,15 @@ python chopify.py "URL" --broll --llm qwen2.5:7b           # local LLM plans the
 
 Stages (also runnable one by one): `broll_plan.py work` &#8594; `broll_fetch.py work` &#8594; `render_clips.py work --broll`.
 
-- **Planning** &#8212; picks concrete nouns / proper nouns from the transcript and puts a
-  cutaway just before the word is spoken. The first 1.5 s of every clip (the hook) always
-  stays on the speaker, cutaways never overlap, and B-roll covers at most
-  `--broll-max-pct` (default 0.40) of a clip.
+- **Planning** &#8212; cuts away only when the speaker says something concrete and filmable
+  (money, laptop, rocket, city&#8230; &#8212; the `VISUAL` word list in `broll_plan.py`, add your
+  own) and puts the cutaway just before the word is spoken. Names, verbs and abstract words
+  are never searched for, so a sentence with nothing filmable gets no cutaway. The first 3 s
+  of every clip (the hook) always stay on the speaker, cutaways never overlap, and B-roll
+  covers at most `--broll-max-pct` (default 0.30) of a clip.
+- **Relevance check** &#8212; a downloaded asset must carry at least one of the searched words in
+  its own tags/description (Pixabay tags, Pexels page title); otherwise it is skipped and, if
+  nothing fits, the cutaway is dropped.
 - **Sources** (`--broll-sources`, default `local,pexels,pixabay`) &#8212; your own folder is
   matched by file/folder names against the cutaway query (`rocket_launch.mp4` matches
   "rocket"). Pexels and Pixabay need a free API key and allow commercial use without
