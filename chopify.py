@@ -138,6 +138,9 @@ def main():
                          "pexels/pixabay need PEXELS_API_KEY / PIXABAY_API_KEY")
     ap.add_argument("--broll-max-pct", type=float, default=0.30, metavar="FRAC",
                     help="max fraction of each clip covered by B-roll (default 0.30)")
+    ap.add_argument("--no-pip-zoom", action="store_true",
+                    help="don't zoom into the speaker's box when the source switches to a "
+                         "small picture-in-picture layout (9:16 and 1:1 only)")
     ap.add_argument("--min-score", type=float, default=None,
                     help="keep clips at/above this virality score")
     ap.add_argument("--max-clips", type=int, default=10)
@@ -199,6 +202,8 @@ def main():
            "--aspect", args.aspect, "--style", args.style]
     if args.broll:
         cmd.append("--broll")
+    if args.no_pip_zoom:
+        cmd.append("--no-pip-zoom")
     if args.out:
         cmd += ["--out", args.out]
     if args.tighten:

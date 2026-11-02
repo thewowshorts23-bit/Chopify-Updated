@@ -102,7 +102,7 @@ def cover_size(w, h, tw, th):
     return sw + sw % 2, sh + sh % 2
 
 
-def build_graph(base_chain, cuts, tw, th, fps, tail_chain, probe=None, fade=FADE):
+def build_graph(base_chain, cuts, tw, th, fps, tail_chain, probe=None, fade=FADE, pip=None):
     """Build the -filter_complex graph.
 
     base_chain: filters turning input 0 into the framed speaker video, e.g.
@@ -110,13 +110,25 @@ def build_graph(base_chain, cuts, tw, th, fps, tail_chain, probe=None, fade=FADE
     cuts:       output of retime_cuts() (needs rt, rd, kind, path).
     tail_chain: filters applied after the overlays, e.g. "subtitles=_caption.ass".
     probe:      callable(path) -> (w, h) used for still images (falls back to cut w/h).
+    pip:        optional layout_detect.plan() result; zooms into the speaker's box during
+                picture-in-picture segments (works with or without cutaways).
 
     Returns (extra_input_args, filter_complex). Map the result with
     ["-map", "[outv]", "-map", "0:a?"] - B-roll audio is never used.
     """
     inputs = []
-    parts = [f"[0:v]{base_chain}[base]"]
-    last = "base"
+    if pip:
+        # picture-in-picture moments: the whole source frame, scaled so the speaker's box
+        # fills the output, is overlaid on the normal crop for just those time ranges
+        enable = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in pip["segments"])
+        parts = ["[0:v]split=2[s0][s1]",
+                 f"[s0]{base_chain}[base]",
+                 f"[s1]scale={pip['sw']}:{pip['sh']}:flags=lanczos,setsar=1[pz]",
+                 f"[base][pz]overlay=x={pip['ox']}:y={pip['oy']}:enable='{enable}'[vp]"]
+        last = "vp"
+    else:
+        parts = [f"[0:v]{base_chain}[base]"]
+        last = "base"
     for k, c in enumerate(cuts):
         n = k + 1
         t0, d = float(c["rt"]), float(c["rd"])

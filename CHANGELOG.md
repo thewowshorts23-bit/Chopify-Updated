@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   URL, license for every asset used).
 - Pre-flight check for `--broll` (needs a key or a `--broll-dir`).
 
+- **Picture-in-picture zoom** (on by default for 9:16 / 1:1, `--no-pip-zoom` to disable):
+  when a podcast cuts to a small framed video box, the box is detected
+  (`layout_detect.py`) and zoomed to fill the frame instead of being cropped in half with
+  black bars. Only fires when the face tracker finds a face inside the box.
+- B-roll planning only cuts away on concrete, filmable words; one idea per cutaway;
+  "a couple of" is not a couple; downloaded footage must match the search in its own tags.
+
 ### Fixed
 - `--llm` silently never worked from the command line: `LLM_SYSTEM` was defined
   below the `if __name__ == "__main__"` block, so the NameError was swallowed by

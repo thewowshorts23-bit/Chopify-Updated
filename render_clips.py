@@ -27,6 +27,7 @@ from pathlib import Path
 import tighten  # local module: filler/silence removal
 import smooth_crop  # cut-aware, per-frame smooth crop path
 import broll_overlay  # B-roll cutaway filter graph (used with --broll)
+import layout_detect  # picture-in-picture detection -> zoom into the speaker's box
 
 # aspect -> (target_w, target_h, caption_font_size, caption_margin_v)
 ASPECTS = {
@@ -316,7 +317,8 @@ def write_meta(seg, out_path, credits=None, source_url=None):
 
 
 def render(seg, words, source, W, H, workdir, aspect, out_dir=None, style=DEFAULT_STYLE,
-           do_tighten=False, loudnorm=False, preview=False, broll=None, source_url=None):
+           do_tighten=False, loudnorm=False, preview=False, broll=None, source_url=None,
+           pip_zoom=True):
     """Render one clip. `broll` = this clip's cutaways from broll_overlay.load_cuts()
     (absolute source times + asset paths); None/[] renders exactly as before."""
     # Resolve once: ffmpeg runs with cwd=out_dir, so a relative out_dir (the default
@@ -356,10 +358,15 @@ def render(seg, words, source, W, H, workdir, aspect, out_dir=None, style=DEFAUL
 
     needs_track = cw < W * 0.95          # real horizontal crop -> track the speaker
     fps = ffprobe_fps(render_src)
+    pip = None
     if needs_track:
-        track = smooth_crop.smooth_track(
-            detect_track(render_src, start, dur, W, workdir), W, cw, fps, DET_FPS)
+        raw_track = detect_track(render_src, start, dur, W, workdir)
+        track = smooth_crop.smooth_track(raw_track, W, cw, fps, DET_FPS)
         smooth_crop.build_sendcmd(track, cw, out_dir / "_crop.cmd", fps)
+        if pip_zoom:
+            # podcasts that switch to a small framed box: zoom into it instead of
+            # showing half the box with black bars (only where a face is in the box)
+            pip = layout_detect.plan(render_src, start, dur, W, H, tw, th, raw_track)
         init_x = max(0, min(int(round(track[0][1] - cw / 2.0)), W - cw))
         base = (f"sendcmd=f=_crop.cmd,crop=w={cw}:h={ch}:x={init_x}:y={y0}:exact=1,"
                 f"scale={tw}:{th}")
@@ -372,12 +379,15 @@ def render(seg, words, source, W, H, workdir, aspect, out_dir=None, style=DEFAUL
     suffix = ".preview" if preview else ""
     out = out_dir / (sanitize(seg.get("hook", "clip")) + suffix + ".mp4")
     head = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(render_src)]
-    if cuts:
+    if cuts or pip:
         extra, fc = broll_overlay.build_graph(base, cuts, tw, th, fps, caption,
-                                              probe=ffprobe_dims)
+                                              probe=ffprobe_dims, pip=pip)
         head += extra
         graph = ["-filter_complex", fc, "-map", "[outv]", "-map", "0:a?"]
-        mode += f" + {len(cuts)} b-roll"
+        if pip:
+            mode += " + pip zoom"
+        if cuts:
+            mode += f" + {len(cuts)} b-roll"
     else:
         graph = ["-vf", f"{base},{caption}"]
     cmd = head + ["-t", f"{dur:.3f}"] + graph + [
@@ -440,6 +450,9 @@ def main():
     ap.add_argument("--broll", action="store_true",
                     help="add B-roll cutaways from work/broll.json "
                          "(run broll_plan.py + broll_fetch.py first)")
+    ap.add_argument("--no-pip-zoom", action="store_true",
+                    help="don't zoom into the speaker's box when the source switches to a "
+                         "small picture-in-picture layout (9:16 and 1:1 only)")
     args = ap.parse_args()
 
     workdir = Path(args.workdir).resolve()
@@ -478,7 +491,8 @@ def main():
                                     out_dir=out_dir, style=args.style,
                                     do_tighten=args.tighten, loudnorm=args.loudnorm,
                                     preview=args.preview, broll=cuts,
-                                    source_url=source_url)))
+                                    source_url=source_url,
+                                    pip_zoom=not args.no_pip_zoom)))
         except subprocess.CalledProcessError as e:
             print(f"ERROR rendering clip {i}: {e}", flush=True)
 

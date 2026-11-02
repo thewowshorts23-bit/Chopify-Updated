@@ -166,6 +166,17 @@ Stages (also runnable one by one): `broll_plan.py work` &#8594; `broll_fetch.py 
 > videos, videos you have permission for, or videos you add real commentary to, and check
 > YouTube's current Partner Program policies.
 
+## Podcast layouts (picture-in-picture zoom)
+
+Many podcasts cut between a full-frame close-up and a dark frame holding a small framed
+video box. A normal 9:16 / 1:1 crop shows half of that box with black bars. For 9:16 and 1:1
+output Chopify now detects those moments (`layout_detect.py`) and zooms into the speaker's box
+so the face fills the frame. It only triggers when the face tracker really finds a face inside
+the box, so dark scenes, letterboxing and full-screen graphics are left alone. Each clip prints
+a `layout: picture-in-picture at ...` line when it fires. The box is upscaled, so it looks a
+little softer than the close-up shots; turn it off with `--no-pip-zoom`. 16:9 output is never
+touched.
+
 ## FAQ
 
 **What is Chopify?**
